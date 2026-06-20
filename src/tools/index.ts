@@ -1,6 +1,7 @@
 import type { RelationSchema } from "@acastos/fact-query";
 import type { FactDb } from "../factdb.js";
 import { makeRunCliTool } from "./run-cli.js";
+import { makeRunCliTrackedTool } from "./run-cli-tracked.js";
 import { makeRecordFactTool } from "./record-fact.js";
 import { makeQueryFactsTool } from "./query-facts.js";
 
@@ -12,6 +13,7 @@ import { makeQueryFactsTool } from "./query-facts.js";
 export function discoverTools(opts: { db: FactDb; target: string; schema: RelationSchema[] }) {
   return [
     makeRunCliTool(opts.target),
+    makeRunCliTrackedTool(opts.target),
     makeRecordFactTool(opts.db, opts.schema),
     makeQueryFactsTool(opts.db),
   ] as const;

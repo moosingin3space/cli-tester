@@ -36,11 +36,17 @@ import { FactEngine, FactQueryError, type FactValueInput } from "@acastos/fact-q
  *   ("No such file", "not found", "does not exist").
  * - `config_file(command, path)` — a config/data file the command's own help or
  *   usage text says it reads from the working directory.
+ * - `creates_file(argv, path)` — running that argument line created `path` in the
+ *   working tree (observed directly, via git; see {@link runTargetTracked}).
+ * - `modifies_file(argv, path)` — running it changed an existing tracked `path`.
+ * - `deletes_file(argv, path)` — running it removed a tracked `path`.
  * - `characterized(argv)` — derived: argument lines we have an exit code for.
  * - `needs_file(command, path)` — derived: a declared `command` that relies on a
  *   `config_file` it reads.
  * - `expected_path(path)` — derived: a path the working directory is expected to
  *   provide — either named as a config input or looked for and reported missing.
+ * - `mutates_tree(argv)` — derived: argument lines with any working-tree side
+ *   effect (create / modify / delete).
  */
 export const DEFAULT_SCHEMA = `relation command(sym);
 relation flag(sym, sym);
@@ -49,13 +55,20 @@ relation output_contains(sym, sym);
 relation mentions_path(sym, sym);
 relation missing_file(sym, sym);
 relation config_file(sym, sym);
+relation creates_file(sym, sym);
+relation modifies_file(sym, sym);
+relation deletes_file(sym, sym);
 relation characterized(sym);
 relation needs_file(sym, sym);
 relation expected_path(sym);
+relation mutates_tree(sym);
 characterized(a) <-- invocation(a, code);
 needs_file(cmd, path) <-- command(cmd), config_file(cmd, path);
 expected_path(path) <-- config_file(cmd, path);
-expected_path(path) <-- missing_file(argv, path);`;
+expected_path(path) <-- missing_file(argv, path);
+mutates_tree(a) <-- creates_file(a, path);
+mutates_tree(a) <-- modifies_file(a, path);
+mutates_tree(a) <-- deletes_file(a, path);`;
 
 /** A ground fact: a relation name plus its column values. */
 export interface Fact {

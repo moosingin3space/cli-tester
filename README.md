@@ -67,9 +67,13 @@ whether behavior is allowed):
 | `mentions_path(argv, path)` | a filesystem path the tool printed for that argv |
 | `missing_file(argv, path)` | a path that argv reported as absent ("No such file") |
 | `config_file(command, path)` | a config/data file the command's help says it reads |
+| `creates_file(argv, path)` | a file that argv created in the working tree (via git) |
+| `modifies_file(argv, path)` | a tracked file that argv changed |
+| `deletes_file(argv, path)` | a tracked file that argv removed |
 | `characterized(argv)` | *derived* — argv lines with a known exit code |
 | `needs_file(command, path)` | *derived* — a command that relies on a `config_file` |
 | `expected_path(path)` | *derived* — a path the working directory is expected to provide |
+| `mutates_tree(argv)` | *derived* — argv lines with any working-tree side effect |
 
 ## How it maps to the substrate
 

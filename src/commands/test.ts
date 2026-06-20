@@ -7,7 +7,7 @@
 
 import { FactQueryError } from "@acastos/fact-query";
 import { FactDb } from "../factdb.js";
-import { runTarget, splitArgv } from "../runner.js";
+import { type FileDelta, runTarget, runTargetTracked, splitArgv } from "../runner.js";
 
 export interface TestOptions {
   target: string;
@@ -17,7 +17,14 @@ export interface TestOptions {
 
 interface Check {
   argv: string;
-  kind: "exit_code" | "output_contains" | "mentions_path" | "missing_file";
+  kind:
+    | "exit_code"
+    | "output_contains"
+    | "mentions_path"
+    | "missing_file"
+    | "creates_file"
+    | "modifies_file"
+    | "deletes_file";
   expected: string;
   actual: string;
   pass: boolean;
@@ -39,6 +46,12 @@ export async function test(opts: TestOptions): Promise<number> {
   // directly verified here.
   let expectedMentions: { argv: string; path: string }[] = [];
   let expectedMissing: { argv: string; path: string }[] = [];
+  // File side-effects observed *directly* (via git). These argvs are replayed
+  // with `runTargetTracked`, which requires a clean git tree and resets it after
+  // each run; the recorded path must reappear in the matching delta bucket.
+  let expectedCreates: { argv: string; path: string }[] = [];
+  let expectedModifies: { argv: string; path: string }[] = [];
+  let expectedDeletes: { argv: string; path: string }[] = [];
   try {
     const relations = new Set(engine.schema().relations.map((r) => r.name));
 
@@ -65,9 +78,34 @@ export async function test(opts: TestOptions): Promise<number> {
       if (mf.truncated) throw new FactQueryError("missing_file query hit the cardinality cap", "eval");
       expectedMissing = mf.rows.map((r) => ({ argv: r[0] as string, path: r[1] as string }));
     }
+
+    if (relations.has("creates_file")) {
+      const cf = engine.query("(argv, path) <-- creates_file(argv, path)");
+      if (cf.truncated) throw new FactQueryError("creates_file query hit the cardinality cap", "eval");
+      expectedCreates = cf.rows.map((r) => ({ argv: r[0] as string, path: r[1] as string }));
+    }
+
+    if (relations.has("modifies_file")) {
+      const mf = engine.query("(argv, path) <-- modifies_file(argv, path)");
+      if (mf.truncated) throw new FactQueryError("modifies_file query hit the cardinality cap", "eval");
+      expectedModifies = mf.rows.map((r) => ({ argv: r[0] as string, path: r[1] as string }));
+    }
+
+    if (relations.has("deletes_file")) {
+      const df = engine.query("(argv, path) <-- deletes_file(argv, path)");
+      if (df.truncated) throw new FactQueryError("deletes_file query hit the cardinality cap", "eval");
+      expectedDeletes = df.rows.map((r) => ({ argv: r[0] as string, path: r[1] as string }));
+    }
   } finally {
     engine.free();
   }
+
+  // Argvs whose file side-effects we must verify — these are replayed *tracked*.
+  const trackedArgvs = new Set<string>([
+    ...expectedCreates.map((e) => e.argv),
+    ...expectedModifies.map((e) => e.argv),
+    ...expectedDeletes.map((e) => e.argv),
+  ]);
 
   // The distinct argv lines we need to actually run.
   const argvs = new Set<string>([
@@ -75,15 +113,27 @@ export async function test(opts: TestOptions): Promise<number> {
     ...expectedSubstr.map((e) => e.argv),
     ...expectedMentions.map((e) => e.argv),
     ...expectedMissing.map((e) => e.argv),
+    ...trackedArgvs,
   ]);
   if (argvs.size === 0) {
     process.stderr.write("No invocations recorded in the database — nothing to verify.\n");
     return 0;
   }
 
-  // Run each distinct argv once and reuse the result across checks.
+  // Run each distinct argv once and reuse the result across checks. Tracked runs
+  // go first while the git tree is clean (each resets itself afterward); a single
+  // tracked run also satisfies the exit-code / output checks for that argv. The
+  // rest run plain. A dirty or missing git tree makes `runTargetTracked` throw —
+  // fail-closed: the run aborts rather than report a file change unverified.
   const observed = new Map<string, Awaited<ReturnType<typeof runTarget>>>();
+  const deltas = new Map<string, FileDelta>();
+  for (const argv of trackedArgvs) {
+    const r = await runTargetTracked(opts.target, splitArgv(argv), opts.timeoutMs);
+    observed.set(argv, r);
+    deltas.set(argv, { created: r.created, modified: r.modified, deleted: r.deleted });
+  }
   for (const argv of argvs) {
+    if (observed.has(argv)) continue;
     observed.set(argv, await runTarget(opts.target, splitArgv(argv), opts.timeoutMs));
   }
 
@@ -126,6 +176,18 @@ export async function test(opts: TestOptions): Promise<number> {
       pass: combined.includes(path),
     });
   }
+  for (const { argv, path } of expectedCreates) {
+    const pass = deltas.get(argv)!.created.includes(path);
+    checks.push({ argv, kind: "creates_file", expected: path, actual: pass ? "created" : "absent", pass });
+  }
+  for (const { argv, path } of expectedModifies) {
+    const pass = deltas.get(argv)!.modified.includes(path);
+    checks.push({ argv, kind: "modifies_file", expected: path, actual: pass ? "modified" : "absent", pass });
+  }
+  for (const { argv, path } of expectedDeletes) {
+    const pass = deltas.get(argv)!.deleted.includes(path);
+    checks.push({ argv, kind: "deletes_file", expected: path, actual: pass ? "deleted" : "absent", pass });
+  }
 
   // Report.
   let passed = 0;
@@ -145,6 +207,15 @@ export async function test(opts: TestOptions): Promise<number> {
         break;
       case "missing_file":
         detail = `output reports missing file ${JSON.stringify(c.expected)} (${c.actual})`;
+        break;
+      case "creates_file":
+        detail = `creates file ${JSON.stringify(c.expected)} (${c.actual})`;
+        break;
+      case "modifies_file":
+        detail = `modifies file ${JSON.stringify(c.expected)} (${c.actual})`;
+        break;
+      case "deletes_file":
+        detail = `deletes file ${JSON.stringify(c.expected)} (${c.actual})`;
         break;
     }
     process.stdout.write(`[${mark}] ${opts.target} ${c.argv} :: ${detail}\n`);
