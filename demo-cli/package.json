@@ -1,0 +1,8 @@
+{
+  "name": "demo-cli",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "todo": "todo.js"
+  }
+}
