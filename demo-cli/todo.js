@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 
 const DATA_FILE = path.join(__dirname, 'todos.json');
 
@@ -17,95 +16,101 @@ function save(todos) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(todos, null, 2));
 }
 
-let todos = load();
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-const ask = (q) => new Promise((res) => rl.question(q, res));
-
-function list() {
+function list(todos) {
   if (todos.length === 0) {
-    console.log('\n(no todos yet)\n');
+    console.log('(no todos yet)');
     return;
   }
-  console.log();
   todos.forEach((t, i) => {
     const mark = t.done ? '[x]' : '[ ]';
-    console.log(`  ${i + 1}. ${mark} ${t.text}`);
+    console.log(`${i + 1}. ${mark} ${t.text}`);
   });
-  console.log();
 }
 
-function parseIndex(input) {
-  const n = parseInt(input, 10);
+function parseIndex(arg, todos) {
+  const n = parseInt(arg, 10);
   if (isNaN(n) || n < 1 || n > todos.length) {
-    console.log('Invalid number.');
-    return -1;
+    console.error(`Invalid todo number: ${arg}`);
+    process.exit(1);
   }
   return n - 1;
 }
 
-async function add() {
-  const text = (await ask('New todo: ')).trim();
-  if (!text) return;
-  todos.push({ text, done: false });
-  save(todos);
+function usage() {
+  console.log(`Usage:
+  todo list
+  todo add <text...>
+  todo check <number>
+  todo rename <number> <text...>
+  todo delete <number>`);
 }
 
-async function check() {
-  list();
-  if (todos.length === 0) return;
-  const i = parseIndex(await ask('Toggle which #? '));
-  if (i < 0) return;
-  todos[i].done = !todos[i].done;
-  save(todos);
-}
+const [cmd, ...args] = process.argv.slice(2);
+const todos = load();
 
-async function remove() {
-  list();
-  if (todos.length === 0) return;
-  const i = parseIndex(await ask('Delete which #? '));
-  if (i < 0) return;
-  todos.splice(i, 1);
-  save(todos);
-}
+switch (cmd) {
+  case 'list':
+  case 'ls':
+    list(todos);
+    break;
 
-async function rename() {
-  list();
-  if (todos.length === 0) return;
-  const i = parseIndex(await ask('Rename which #? '));
-  if (i < 0) return;
-  const text = (await ask('New text: ')).trim();
-  if (!text) return;
-  todos[i].text = text;
-  save(todos);
-}
-
-function menu() {
-  console.log('Commands: (l)ist  (a)dd  (c)heck/toggle  (r)ename  (d)elete  (q)uit');
-}
-
-async function main() {
-  console.log('\n=== Todo CLI ===');
-  menu();
-  list();
-  while (true) {
-    const cmd = (await ask('> ')).trim().toLowerCase();
-    if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') break;
-    else if (cmd === 'l' || cmd === 'list') list();
-    else if (cmd === 'a' || cmd === 'add') await add();
-    else if (cmd === 'c' || cmd === 'check' || cmd === 'toggle') await check();
-    else if (cmd === 'r' || cmd === 'rename') await rename();
-    else if (cmd === 'd' || cmd === 'delete') await remove();
-    else if (cmd === 'h' || cmd === 'help') menu();
-    else if (cmd === '') continue;
-    else console.log("Unknown command. Type 'h' for help.");
+  case 'add': {
+    const text = args.join(' ').trim();
+    if (!text) {
+      console.error('Missing todo text.');
+      process.exit(1);
+    }
+    todos.push({ text, done: false });
+    save(todos);
+    console.log(`Added: ${text}`);
+    break;
   }
-  rl.close();
-  console.log('Bye!');
-}
 
-main();
+  case 'check':
+  case 'toggle': {
+    if (!args[0]) {
+      console.error('Missing todo number.');
+      process.exit(1);
+    }
+    const i = parseIndex(args[0], todos);
+    todos[i].done = !todos[i].done;
+    save(todos);
+    console.log(`${todos[i].done ? 'Checked' : 'Unchecked'}: ${todos[i].text}`);
+    break;
+  }
+
+  case 'rename': {
+    const i = parseIndex(args[0], todos);
+    const text = args.slice(1).join(' ').trim();
+    if (!text) {
+      console.error('Missing new text.');
+      process.exit(1);
+    }
+    const old = todos[i].text;
+    todos[i].text = text;
+    save(todos);
+    console.log(`Renamed: ${old} -> ${text}`);
+    break;
+  }
+
+  case 'delete':
+  case 'rm': {
+    const i = parseIndex(args[0], todos);
+    const [removed] = todos.splice(i, 1);
+    save(todos);
+    console.log(`Deleted: ${removed.text}`);
+    break;
+  }
+
+  case undefined:
+  case 'help':
+  case '-h':
+  case '--help':
+    usage();
+    break;
+
+  default:
+    console.error(`Unknown command: ${cmd}`);
+    usage();
+    process.exit(1);
+}
