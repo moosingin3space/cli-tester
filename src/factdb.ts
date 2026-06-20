@@ -29,14 +29,33 @@ import { FactEngine, FactQueryError, type FactValueInput } from "@acastos/fact-q
  *   target binary) and the exit code it was observed to produce.
  * - `output_contains(argv, substring)` — a substring observed in the combined
  *   stdout+stderr of that argument line.
+ * - `mentions_path(argv, path)` — a filesystem path the tool *printed* in the
+ *   combined output of that argument line. (Observed through the tool's own
+ *   output — the agent has no filesystem access.)
+ * - `missing_file(argv, path)` — a path that argument line reported as absent
+ *   ("No such file", "not found", "does not exist").
+ * - `config_file(command, path)` — a config/data file the command's own help or
+ *   usage text says it reads from the working directory.
  * - `characterized(argv)` — derived: argument lines we have an exit code for.
+ * - `needs_file(command, path)` — derived: a declared `command` that relies on a
+ *   `config_file` it reads.
+ * - `expected_path(path)` — derived: a path the working directory is expected to
+ *   provide — either named as a config input or looked for and reported missing.
  */
 export const DEFAULT_SCHEMA = `relation command(sym);
 relation flag(sym, sym);
 relation invocation(sym, int);
 relation output_contains(sym, sym);
+relation mentions_path(sym, sym);
+relation missing_file(sym, sym);
+relation config_file(sym, sym);
 relation characterized(sym);
-characterized(a) <-- invocation(a, code);`;
+relation needs_file(sym, sym);
+relation expected_path(sym);
+characterized(a) <-- invocation(a, code);
+needs_file(cmd, path) <-- command(cmd), config_file(cmd, path);
+expected_path(path) <-- config_file(cmd, path);
+expected_path(path) <-- missing_file(argv, path);`;
 
 /** A ground fact: a relation name plus its column values. */
 export interface Fact {

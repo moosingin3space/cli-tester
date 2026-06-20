@@ -64,7 +64,12 @@ whether behavior is allowed):
 | `flag(command, flag)` | a flag accepted under a command |
 | `invocation(argv, exit_code)` | an argument line and the exit code it produced |
 | `output_contains(argv, substring)` | a substring seen in that argv's output |
+| `mentions_path(argv, path)` | a filesystem path the tool printed for that argv |
+| `missing_file(argv, path)` | a path that argv reported as absent ("No such file") |
+| `config_file(command, path)` | a config/data file the command's help says it reads |
 | `characterized(argv)` | *derived* — argv lines with a known exit code |
+| `needs_file(command, path)` | *derived* — a command that relies on a `config_file` |
+| `expected_path(path)` | *derived* — a path the working directory is expected to provide |
 
 ## How it maps to the substrate
 

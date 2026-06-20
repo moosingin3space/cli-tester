@@ -17,7 +17,7 @@ export interface TestOptions {
 
 interface Check {
   argv: string;
-  kind: "exit_code" | "output_contains";
+  kind: "exit_code" | "output_contains" | "mentions_path" | "missing_file";
   expected: string;
   actual: string;
   pass: boolean;
@@ -30,6 +30,15 @@ export async function test(opts: TestOptions): Promise<number> {
 
   let expectedExit: { argv: string; code: bigint }[] = [];
   let expectedSubstr: { argv: string; substring: string }[] = [];
+  // Path-bearing claims observed *through the tool's own output* (the discovery
+  // agent has no filesystem access). Both are argv-keyed and verified the same
+  // way: re-run argv and confirm the path is still referenced in the output. We
+  // cannot independently re-confirm filesystem absence, so `missing_file` is
+  // checked as "the tool still names this path", consistent with how it was
+  // discovered. `config_file` is command-keyed (no argv to replay), so it is not
+  // directly verified here.
+  let expectedMentions: { argv: string; path: string }[] = [];
+  let expectedMissing: { argv: string; path: string }[] = [];
   try {
     const relations = new Set(engine.schema().relations.map((r) => r.name));
 
@@ -44,12 +53,29 @@ export async function test(opts: TestOptions): Promise<number> {
       if (out.truncated) throw new FactQueryError("output_contains query hit the cardinality cap", "eval");
       expectedSubstr = out.rows.map((r) => ({ argv: r[0] as string, substring: r[1] as string }));
     }
+
+    if (relations.has("mentions_path")) {
+      const mp = engine.query("(argv, path) <-- mentions_path(argv, path)");
+      if (mp.truncated) throw new FactQueryError("mentions_path query hit the cardinality cap", "eval");
+      expectedMentions = mp.rows.map((r) => ({ argv: r[0] as string, path: r[1] as string }));
+    }
+
+    if (relations.has("missing_file")) {
+      const mf = engine.query("(argv, path) <-- missing_file(argv, path)");
+      if (mf.truncated) throw new FactQueryError("missing_file query hit the cardinality cap", "eval");
+      expectedMissing = mf.rows.map((r) => ({ argv: r[0] as string, path: r[1] as string }));
+    }
   } finally {
     engine.free();
   }
 
   // The distinct argv lines we need to actually run.
-  const argvs = new Set<string>([...expectedExit.map((e) => e.argv), ...expectedSubstr.map((e) => e.argv)]);
+  const argvs = new Set<string>([
+    ...expectedExit.map((e) => e.argv),
+    ...expectedSubstr.map((e) => e.argv),
+    ...expectedMentions.map((e) => e.argv),
+    ...expectedMissing.map((e) => e.argv),
+  ]);
   if (argvs.size === 0) {
     process.stderr.write("No invocations recorded in the database — nothing to verify.\n");
     return 0;
@@ -78,16 +104,49 @@ export async function test(opts: TestOptions): Promise<number> {
       pass: combined.includes(substring),
     });
   }
+  for (const { argv, path } of expectedMentions) {
+    const r = observed.get(argv)!;
+    const combined = r.stdout + r.stderr;
+    checks.push({
+      argv,
+      kind: "mentions_path",
+      expected: path,
+      actual: combined.includes(path) ? "present" : "absent",
+      pass: combined.includes(path),
+    });
+  }
+  for (const { argv, path } of expectedMissing) {
+    const r = observed.get(argv)!;
+    const combined = r.stdout + r.stderr;
+    checks.push({
+      argv,
+      kind: "missing_file",
+      expected: path,
+      actual: combined.includes(path) ? "present" : "absent",
+      pass: combined.includes(path),
+    });
+  }
 
   // Report.
   let passed = 0;
   for (const c of checks) {
     const mark = c.pass ? "PASS" : "FAIL";
     if (c.pass) passed++;
-    const detail =
-      c.kind === "exit_code"
-        ? `exit ${c.expected} (got ${c.actual})`
-        : `output contains ${JSON.stringify(c.expected)} (${c.actual})`;
+    let detail: string;
+    switch (c.kind) {
+      case "exit_code":
+        detail = `exit ${c.expected} (got ${c.actual})`;
+        break;
+      case "output_contains":
+        detail = `output contains ${JSON.stringify(c.expected)} (${c.actual})`;
+        break;
+      case "mentions_path":
+        detail = `output mentions path ${JSON.stringify(c.expected)} (${c.actual})`;
+        break;
+      case "missing_file":
+        detail = `output reports missing file ${JSON.stringify(c.expected)} (${c.actual})`;
+        break;
+    }
     process.stdout.write(`[${mark}] ${opts.target} ${c.argv} :: ${detail}\n`);
   }
 
